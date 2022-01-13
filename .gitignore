@@ -1,0 +1,10 @@
+# private files
+*.uml
+*.sql
+
+# IntelliJ specific
+.idea
+*.iml
+
+# Build artifacts
+target
