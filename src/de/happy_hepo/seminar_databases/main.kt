@@ -1,5 +1,9 @@
 package de.happy_hepo.seminar_databases
 
+import de.happy_hepo.seminar_databases.database.DatabaseConnectionFactory
+import de.happy_hepo.seminar_databases.database.IDatabaseConnection
+import org.jgrapht.alg.connectivity.ConnectivityInspector
+import org.jgrapht.alg.cycle.CycleDetector
 import org.jgrapht.graph.DefaultDirectedGraph
 import org.jgrapht.graph.DefaultEdge
 
@@ -9,9 +13,12 @@ typealias QueryStructure = Map<String, QueryTable>
 fun main(args: Array<String>) {
     if (args.isNotEmpty()) {
         parseSqlFile(args[0])?.let {
-            // TODO merge List to Graph
+            // merge List to Graph
             val graph = createGraph(it)
-            // createSchemaDesign(it)
+            // TODO Enrich the graph with table data (PK)
+            createSchemaDesign(
+                graph, /*it,*/ "config.json"
+            )
             return
         }
     }
@@ -19,7 +26,7 @@ fun main(args: Array<String>) {
 }
 
 fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable, DefaultEdge> {
-    val dag = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
+    val dg = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
     val relationsPile = HashSet<Pair<String, String>>()
     fun addToPile(tables: Pair<String, String>) {
         relationsPile.find { (first, second) -> first == tables.first && second == tables.second }
@@ -27,9 +34,9 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
     }
 
     fun addRelation(tables: Pair<String, String>) {
-        dag.vertexSet().find { it.Name == tables.second }.let { target ->
+        dg.vertexSet().find { it.Name == tables.second }.let { target ->
             if (target != null) {
-                dag.addEdge(dag.vertexSet().find { it.Name == tables.first }, target)
+                dg.addEdge(dg.vertexSet().find { it.Name == tables.first }, target)
             } else {
                 addToPile(tables)
             }
@@ -44,12 +51,12 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
 
     queries.forEach { query ->
         query.forEach { (name, table) ->
-            dag.vertexSet().find { it.Name == name }.let { vertex ->
+            dg.vertexSet().find { it.Name == name }.let { vertex ->
                 if (vertex != null) {
                     vertex.merge(table)
                     addTableRelations(vertex)
                 } else {
-                    dag.addVertex(table)
+                    dg.addVertex(table)
                     addTableRelations(table)
                     relationsPile.filter { (_, target) -> target == name }.forEach(::addRelation)
                     relationsPile.removeIf { (_, target) -> target == name }
@@ -57,50 +64,74 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
             }
         }
     }
-    return dag
+    return dg
 }
 
-fun createSchemaDesign(graph: DefaultDirectedGraph<QueryTable, DefaultEdge>, queries: List<QueryStructure>) {
-//    Input:
-//    graph gives:
-//    var userTables- A list of relational database tables with table structure,
-//    var relationArrayList –A list of relationship of relational tables(Format given in Table 1),
-//    queries gives:
-//    var selectQueryJSON –A list select queries in JSON file (Format given in Figure 2(a)),
-//    var updateQueryJSON –A list of update queries in JSON file (Format given in Figure 2(b)).
-//
-//    Output: All possible combination of each relational tables in JSON format, after applying select and update queries, in
-//    tableList[][] for document store database of NoSQL.
-    val userTables = graph.vertexSet()
-//    Begin
-//    for each table x in userTables, create t document as a JSON structure
-    userTables.forEach { table ->
-//    Begin
-//    var STab[] //It is a one dimensional array on JSON object.
-        val documents = ArrayList<DocumentStructure>()
-//    //Now t JSON has key/value corresponding to columnName/dataType of x table.
-//    Add updateWeight=0 and selectWeight= 0 to t as key/Value.
-//    Add t in STab[].
-        documents.add(DocumentStructure(table))
-//    for each relation rs in relationArrayList
-//    Begin
-//    If t and keys of t is available in (p_table, p_column) of relationArrayList
-//    Begin
-//    for each(t.key and corresponding elements of list[][] are in select-list of each selectQueryJSON query )
-//    Begin
-//    1. Add/ update each select queries select-list with intermediate table’s primary key in t{} as embed with c_table as
-//    keyName (c_table of Table 1).
-//    2. Add/update Where clauses column-tablename in t{} as embed with c_table as keyName (Only Child Table Columns
-//    will be added/updated in Parent table).
-//    3. Update selectWeight = selectWeight+CurrentSelectQueryWeight in t{}.
-//    4. if Adding select-list data to t{} with those column that are in update query of updateQueryJSON (update columns
-//    must be of different tables then t{}) then Update updateWeight = updateWeight+CurrentUpdateQueryWeight in t{}.
-//    5. For each updated t{}, Updated t{} can be renamed to tQueryID and add tQueryID in list STab[].
-//    End for;
-//    End if;
-//    End for;
-//    Add STab[] in tableList[][]
-//    End for;
+// TODO Überlegungen: Zyklen in Graphen identifizieren
+//  non-Zyklische Graphen: hierarchisch auflösen
+//  Graphen optimierter Algorithmus analog der Graphen paper
+
+// TODO Graphen algorithmus zur bestimmung der verbindungen, Schema aus Tabelle zur Bestimmung der Properties/Keys, verschiedene Dokumenten Schemata generieren
+// TODO Algorithmus: Primary Key/Foreign Table egal, geht nur um gerichtete Beziehung, einmal ohne Algorithmus probieren
+// TODO Bei Hierarchischen Queries prüfen, welche Eltern/Kind-Attribute benötigt werden; in Dokument aufnehmen
+// TODO Tabellen mit PK als input, um anhand von PK zu identifizieren, was Part ist und was Parent ist - MySQL - DESCRIBE table; Filter auf Key = 'PRI';
+//  Optional Input mit Tabellen, deren Einträge einzelnes Objekt identifizieren? Brauche ich das? Könnte zuviel werden
+// TODO Beziehungen in Queries müssen gerichtet sein, damit JOINS durchgeführt werden können, d.h. Reihenfolge matters
+//  außer wenn die Beziehung ungerichtet ist, es kann aber nicht gerichtet in die falsche Richtung sein
+//  => Doch
+fun createSchemaDesign(
+    graph: DefaultDirectedGraph<QueryTable, DefaultEdge>,
+    // queries: List<QueryStructure>,
+    configFile: String,
+) {
+    // TODO Zusätzliche Infos aus DB ziehen? Spalten, welche noch?
+    DatabaseConnectionFactory(configFile)?.use { connection ->
+        val connectedGraphs = ConnectivityInspector(graph).connectedSets().map { vertices ->
+            val dg = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
+            vertices.forEach(dg::addVertex)
+            vertices.forEach { vertex ->
+                vertex.Relations.keys
+                    .filter { otherTable -> otherTable != vertex.Name }
+                    .forEach { otherTable -> dg.addEdge(vertex, vertices.find { it.Name == otherTable }) }
+            }
+            if (CycleDetector(dg).detectCycles()) {
+                // TODO Identify cycle
+                //  if no edges point into cycle from other part of graph
+                //   then what??
+                //   else start from the vertexes that have no predecessors
+                println("Queries contain cycles! Not supported")
+                null
+            } else {
+                dg
+            }
+        }.filterNotNull()
+            .forEach { subGraph ->
+                val origins = subGraph.vertexSet().let { tables ->
+                    val successors = tables.flatMap { table -> table.Relations.filter{(otherTable,_)->otherTable!=table.Name}.keys }
+                    tables.filter { table -> !successors.contains(table.Name) }
+                }
+                val userTables = subGraph.vertexSet()
+                userTables.forEach { table ->
+                    val documents = ArrayList<DocumentStructure>()
+                    val structure = DocumentStructure(table, connection.getTableStructure(table.Name))
+                    documents.add(structure)
+                    table.Relations.forEach { (otherTable, columns) ->
+                        /*queries.filter { query ->
+                            (query[table.Name]?.Properties?.containsAll(table.Properties) ?: false) &&
+                                    (query[otherTable]?.Properties?.containsAll(columns.map { it.second }) ?: false)
+                        }.forEach {
+                            val tableWithQuery = structure.clone()
+                            tableWithQuery.weight += it.size
+                        }*/
+                    }
+                }
+            }
     }
-//    End Algorithm 1.
+}
+
+fun generateExtensions(table: QueryTable, connection: IDatabaseConnection): List<DocumentStructure> {
+    val documents = ArrayList<DocumentStructure>()
+    val structure = DocumentStructure(table, connection.getTableStructure(table.Name))
+    documents.add(structure)
+    return documents
 }

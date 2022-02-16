@@ -1,6 +1,7 @@
 # private files
 *.uml
 *.sql
+config.json
 
 # IntelliJ specific
 .idea

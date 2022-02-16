@@ -179,18 +179,37 @@ fun cleanUnionCondition(query: Select): List<Select> {
     return arrayListOf(query)
 }
 
-fun cleanSubSelect(select: Select): Select {
+fun cleanSubSelect(select: Select, replacementFilter: (String) -> Boolean = { true }): Select {
     select.selectBody.let { body ->
         if (body is PlainSelect) {
-            cleanSubSelect(body)
+            cleanSubSelect(body, replacementFilter)
         }
     }
     return select
 }
 
-fun cleanSubSelect(body: PlainSelect) {
+fun cleanSubSelect(body: PlainSelect, replacementFilter: (String) -> Boolean = { true }) {
     fun clean(from: FromItem, index: Int = 0): FromItem? {
         ((from as? SubSelect)?.selectBody as? PlainSelect)?.let { subSelect ->
+            (subSelect.fromItem as? Table)?.let { from ->
+                if (replacementFilter(from.name)) {
+                    subSelect.joins?.find { join -> (join.rightItem as? Table)?.name?.let { replacementFilter(it) } != true }?.let { join ->
+                        val replacer = TableReplacerFactory(
+                            join.rightItem as Table,
+                            listOf(join.rightItem.alias?.name, from.name, from.alias?.name),
+                        )
+                        subSelect.fromItem = join.rightItem
+                        subSelect.selectItems.forEach {
+                            it.accept(replacer)
+                        }
+                        subSelect.joins?.forEach {
+                            it.onExpressions.forEach { on -> on.accept(replacer) }
+                            it.usingColumns.forEach { on -> on.accept(replacer) }
+                        }
+                        subSelect.where?.accept(replacer)
+                    }
+                }
+            }
             val tableFixer = TableFixerFactory(subSelect, from.alias?.name)
 
             // Fix select items
@@ -231,6 +250,7 @@ fun cleanSubSelect(body: PlainSelect) {
     }
 }
 
+// TODO map CTEs to original table
 fun cleanWith(query: Select): Select {
     if (query.withItemsList?.isNotEmpty() == true) {
         // Merge WithItems into single
@@ -279,20 +299,21 @@ fun cleanWith(query: Select): Select {
     return query
 }
 
-fun replaceTable(base: PlainSelect, subSelectFor: (String) -> SubSelect, alias: Alias?, replacementFilter: (String) -> Boolean = { true }) {
+fun replaceTable(base: PlainSelect, fromItemFactory: (String) -> FromItem, alias: Alias?, replacementFilter: (String) -> Boolean = { true }) {
     (base.fromItem as Table).let { table ->
         if (replacementFilter(table.name)) {
-            base.fromItem = subSelectFor(table.name).withAlias(alias)
+            base.fromItem = fromItemFactory(table.name).withAlias(alias)
         }
     }
     base.joins?.forEach {
         (it.rightItem as Table).let { table ->
             if (replacementFilter(table.name)) {
-                it.rightItem = subSelectFor(table.name).withAlias(table.alias ?: Alias(table.name))
+                it.rightItem = fromItemFactory(table.name).withAlias(table.alias ?: Alias(table.name))
             }
         }
     }
-    cleanSubSelect(base)
+    // TODO resolve recursive
+    cleanSubSelect(base, replacementFilter)
 }
 
 /**
