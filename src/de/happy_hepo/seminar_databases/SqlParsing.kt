@@ -382,7 +382,7 @@ fun TableFixerFactory(select: PlainSelect, alias: String?): ExpressionVisitorAda
                                     checkColumn(item.rightExpression) -> item.rightExpression = subItem.expression
                                 }
                             }
-                            else -> println()
+                            else -> {}
                         }
                     }
                 }

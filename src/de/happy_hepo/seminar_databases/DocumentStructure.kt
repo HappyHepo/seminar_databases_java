@@ -3,19 +3,36 @@ package de.happy_hepo.seminar_databases
 import de.happy_hepo.seminar_databases.database.Column
 
 class DocumentStructure(
-    val BaseTable: QueryTable,
-    val DatabaseColumns: List<Column>? = null,
+    val baseTable: QueryTable,
+    val databaseColumns: List<Column>? = null,
 ) {
-    var weight = 0
-    val keys = this.DatabaseColumns?.filter { it.Key }?.map { it.Name } ?: emptyList()
+    val keys = this.databaseColumns?.filter { it.Key }?.map { it.Name } ?: emptyList()
+    val name = this.baseTable.Name
+    val nested: MutableList<DocumentStructure> = ArrayList()
 
-    fun clone(): DocumentStructure {
-        val out = DocumentStructure(this.BaseTable, this.DatabaseColumns)
-        out.weight = this.weight
-        return out
+    override fun toString(): String {
+        return this.toString(0).replace("\n", "")
     }
 
-   override fun toString(): String { // TODO
-        return "TODO"
+    fun toString(indentBy: Int, original: Int = indentBy): String { // TODO
+        val indent = " ".repeat(indentBy)
+        return "${" ".repeat(indentBy - original)}{\n" +
+                "$indent\"Name\":\"${this.name}\",\n" +
+                "$indent\"Key\":\"${this.keys.joinToString(",")}\",\n" +
+                "$indent\"Columns\":{" +
+                (this.databaseColumns?.joinToString(",\n") { "$indent${" ".repeat(original)}\"${it.Name}\":\"${it.Type}\"" }
+                    ?.let { "\n$it\n" }
+                    ?: "") +
+                "$indent},\n" +
+                "$indent\"Nested\":[" +
+                this.nested.joinToString(",\n") { it.toString(indentBy + 2 * original, original) }.let {
+                    if (it.isEmpty()) {
+                        it
+                    } else {
+                        "\n$it\n$indent"
+                    }
+                } +
+                "]\n" +
+                "${" ".repeat(indentBy - original)}}"
     }
 }

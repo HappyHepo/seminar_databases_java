@@ -1,12 +1,11 @@
 package de.happy_hepo.seminar_databases
 
 import de.happy_hepo.seminar_databases.database.DatabaseConnectionFactory
-import de.happy_hepo.seminar_databases.database.IDatabaseConnection
+import de.happy_hepo.seminar_databases.ui.*
 import org.jgrapht.alg.connectivity.ConnectivityInspector
 import org.jgrapht.alg.cycle.CycleDetector
 import org.jgrapht.graph.DefaultDirectedGraph
 import org.jgrapht.graph.DefaultEdge
-
 
 typealias QueryStructure = Map<String, QueryTable>
 
@@ -84,54 +83,114 @@ fun createSchemaDesign(
     // queries: List<QueryStructure>,
     configFile: String,
 ) {
+    val ui: IUi = CliUi()
     // TODO Zusätzliche Infos aus DB ziehen? Spalten, welche noch?
     DatabaseConnectionFactory(configFile)?.use { connection ->
-        val connectedGraphs = ConnectivityInspector(graph).connectedSets().map { vertices ->
-            val dg = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
-            vertices.forEach(dg::addVertex)
-            vertices.forEach { vertex ->
-                vertex.Relations.keys
-                    .filter { otherTable -> otherTable != vertex.Name }
-                    .forEach { otherTable -> dg.addEdge(vertex, vertices.find { it.Name == otherTable }) }
-            }
-            if (CycleDetector(dg).detectCycles()) {
-                // TODO Identify cycle
-                //  if no edges point into cycle from other part of graph
-                //   then what??
-                //   else start from the vertexes that have no predecessors
-                println("Queries contain cycles! Not supported")
-                null
-            } else {
-                dg
-            }
-        }.filterNotNull()
-            .forEach { subGraph ->
-                val origins = subGraph.vertexSet().let { tables ->
-                    val successors = tables.flatMap { table -> table.Relations.filter{(otherTable,_)->otherTable!=table.Name}.keys }
-                    tables.filter { table -> !successors.contains(table.Name) }
+        val connectedGraphs = ConnectivityInspector(graph).connectedSets()
+            .filter { tables ->
+                val dg = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
+                tables.forEach(dg::addVertex)
+                tables.forEach { vertex ->
+                    vertex.Relations.keys
+                        .filter { otherTable -> otherTable != vertex.Name }
+                        .forEach { otherTable -> dg.addEdge(vertex, tables.find { it.Name == otherTable }) }
                 }
-                val userTables = subGraph.vertexSet()
-                userTables.forEach { table ->
-                    val documents = ArrayList<DocumentStructure>()
-                    val structure = DocumentStructure(table, connection.getTableStructure(table.Name))
-                    documents.add(structure)
-                    table.Relations.forEach { (otherTable, columns) ->
-                        /*queries.filter { query ->
-                            (query[table.Name]?.Properties?.containsAll(table.Properties) ?: false) &&
-                                    (query[otherTable]?.Properties?.containsAll(columns.map { it.second }) ?: false)
-                        }.forEach {
-                            val tableWithQuery = structure.clone()
-                            tableWithQuery.weight += it.size
-                        }*/
+                if (CycleDetector(dg).detectCycles()) {
+                    // TODO Identify cycle
+                    //  if no edges point into cycle from other part of graph
+                    //   then what??
+                    //   else start from the vertexes that have no predecessors
+                    println("Queries contain cycles! Not supported")
+                    false
+                } else {
+                    true
+                }
+            }
+            .map { tables -> tables.map { DocumentStructure(it, connection.getTableStructure(it.Name)) } }
+            .map { documents ->
+                documents.forEach { document ->
+                    document.baseTable.Relations
+                        .filter { (_, columns) -> document.keys.containsAll(columns.map { it.first }) }
+                        .forEach { (otherTable, columns) ->
+                            documents
+                                .find { it.name == otherTable && !(it.keys.containsAll(columns.map { col -> col.second }) && it.keys.size >= document.keys.size) }
+                                ?.let { switchRelation(document, it) }
+                        }
+                }
+
+                val subGraph = DefaultDirectedGraph<DocumentStructure, DefaultEdge>(DefaultEdge::class.java)
+                documents.forEach(subGraph::addVertex)
+                documents.forEach { vertex ->
+                    vertex.baseTable.Relations.keys.forEach { otherTable -> subGraph.addEdge(vertex, documents.find { it.name == otherTable }) }
+                }
+
+                subGraph
+            }
+            .flatMap { subGraph ->
+                val tables = subGraph.vertexSet().associateBy { it.name }
+                val documentCache = HashMap<String, DocumentStructure>()
+                fun getOrigins(tables: Collection<DocumentStructure>): List<String> {
+                    val successors = tables.flatMap { table -> table.baseTable.Relations.filter { (otherTable, _) -> otherTable != table.name }.keys }
+                    return tables.filter { table -> !successors.contains(table.name) }.map { it.name }
+                }
+
+                fun generateFullExtension(table: String): DocumentStructure {
+                    val current = documentCache[table]?.let { return it } ?: tables[table]!!
+                    current.nested.addAll(current.baseTable.Relations.keys.map(::generateFullExtension))
+                    documentCache[table] = current
+                    return current;
+                }
+
+                var origins = getOrigins(tables.values)
+                val additionalDocuments = mutableSetOf<String>()
+                val approved = ArrayList<String>()
+                do {
+                    val root = origins.find { !approved.contains(it) } ?: additionalDocuments.find { !approved.contains(it) }!!
+                    val extended = generateFullExtension(root)
+                    when (val result = ui.askApproval(extended)) {
+                        ApprovalAnswer.Approve -> approved.add(root)
+                        ApprovalAnswer.Reverse -> {
+                            result.data
+                                ?.mapNotNull { tables[it] }
+                                ?.let { reverseList ->
+                                    reverseList
+                                        .mapIndexedNotNull { i, current ->
+                                            if (i == 0) {
+                                                null
+                                            } else {
+                                                Pair(reverseList[i - 1], current)
+                                            }
+                                        }
+                                        .forEach {
+                                            switchRelation(it.first, it.second)
+                                        }
+                                }
+                        }
+                        ApprovalAnswer.Duplicate, ApprovalAnswer.Split -> {
+                            result.data?.let { (parent, child) ->
+                                additionalDocuments.add(child)
+                                if (result == ApprovalAnswer.Split) {
+                                    tables[parent]?.nested?.removeIf { it.name == child }
+                                }
+                            }
+                        }
                     }
-                }
+                    origins = getOrigins(tables.values)
+                } while (!(approved.containsAll(origins) && approved.containsAll(additionalDocuments)))
+
+                approved.map { tables[it] }
             }
+        // TODO Kardinalitäten bestimmen
+        // TODO Redundanzen/Beziehungen der Objekte ermitteln
     }
 }
 
-fun generateExtensions(table: QueryTable, connection: IDatabaseConnection): List<DocumentStructure> {
-    val documents = ArrayList<DocumentStructure>()
-    val structure = DocumentStructure(table, connection.getTableStructure(table.Name))
-    documents.add(structure)
-    return documents
+fun switchRelation(first: DocumentStructure, second: DocumentStructure) {
+    second.baseTable.Relations[first.name] =
+        (first.baseTable.Relations[second.name]?.map { it.second to it.first } ?: emptyList()).toMutableList()
+    first.baseTable.Relations.remove(second.name)
+    first.nested.find { it.name == second.name }?.let {
+        first.nested.remove(it)
+        second.nested.add(first)
+    }
 }
