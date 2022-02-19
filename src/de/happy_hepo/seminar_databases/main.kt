@@ -6,18 +6,27 @@ import org.jgrapht.alg.connectivity.ConnectivityInspector
 import org.jgrapht.alg.cycle.CycleDetector
 import org.jgrapht.graph.DefaultDirectedGraph
 import org.jgrapht.graph.DefaultEdge
+import java.io.File
 
 typealias QueryStructure = Map<String, QueryTable>
 
 fun main(args: Array<String>) {
     if (args.isNotEmpty()) {
         parseSqlFile(args[0])?.let {
-            // merge List to Graph
+            // merge queries to Graph
             val graph = createGraph(it)
-            // TODO Enrich the graph with table data (PK)
-            createSchemaDesign(
-                graph, /*it,*/ "config.json"
-            )
+
+            val ui: IUi = CliUi()
+            val documents = createSchemaDesign(graph, /*it,*/ "config.json", ui)
+
+            File(args.getOrElse(1) { "out.json" }).let { file ->
+                if (!file.exists()) {
+                    file.createNewFile()
+                } else {
+// TODO ask if overwrite
+                }
+                file.writeText("[${documents.joinToString(",\n") { doc -> doc.toString(4) }}]")
+            }
             return
         }
     }
@@ -33,9 +42,9 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
     }
 
     fun addRelation(tables: Pair<String, String>) {
-        dg.vertexSet().find { it.Name == tables.second }.let { target ->
+        dg.vertexSet().find { it.name == tables.second }.let { target ->
             if (target != null) {
-                dg.addEdge(dg.vertexSet().find { it.Name == tables.first }, target)
+                dg.addEdge(dg.vertexSet().find { it.name == tables.first }, target)
             } else {
                 addToPile(tables)
             }
@@ -43,14 +52,14 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
     }
 
     fun addTableRelations(table: QueryTable) {
-        table.Relations.keys.forEach { other ->
-            addRelation(Pair(table.Name, other))
+        table.relations.keys.forEach { other ->
+            addRelation(Pair(table.name, other))
         }
     }
 
     queries.forEach { query ->
         query.forEach { (name, table) ->
-            dg.vertexSet().find { it.Name == name }.let { vertex ->
+            dg.vertexSet().find { it.name == name }.let { vertex ->
                 if (vertex != null) {
                     vertex.merge(table)
                     addTableRelations(vertex)
@@ -66,34 +75,25 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
     return dg
 }
 
-// TODO Überlegungen: Zyklen in Graphen identifizieren
-//  non-Zyklische Graphen: hierarchisch auflösen
-//  Graphen optimierter Algorithmus analog der Graphen paper
-
-// TODO Graphen algorithmus zur bestimmung der verbindungen, Schema aus Tabelle zur Bestimmung der Properties/Keys, verschiedene Dokumenten Schemata generieren
-// TODO Algorithmus: Primary Key/Foreign Table egal, geht nur um gerichtete Beziehung, einmal ohne Algorithmus probieren
 // TODO Bei Hierarchischen Queries prüfen, welche Eltern/Kind-Attribute benötigt werden; in Dokument aufnehmen
-// TODO Tabellen mit PK als input, um anhand von PK zu identifizieren, was Part ist und was Parent ist - MySQL - DESCRIBE table; Filter auf Key = 'PRI';
-//  Optional Input mit Tabellen, deren Einträge einzelnes Objekt identifizieren? Brauche ich das? Könnte zuviel werden
-// TODO Beziehungen in Queries müssen gerichtet sein, damit JOINS durchgeführt werden können, d.h. Reihenfolge matters
-//  außer wenn die Beziehung ungerichtet ist, es kann aber nicht gerichtet in die falsche Richtung sein
-//  => Doch
+
+// TODO cyclic graphs currently not supported
+//  idea: identify the cycle and ask the user to pick a split
 fun createSchemaDesign(
     graph: DefaultDirectedGraph<QueryTable, DefaultEdge>,
-    // queries: List<QueryStructure>,
+    // queries: List<QueryStructure>, TODO needed?
     configFile: String,
-) {
-    val ui: IUi = CliUi()
-    // TODO Zusätzliche Infos aus DB ziehen? Spalten, welche noch?
+    ui:IUi,
+): List<DocumentStructure> {
     DatabaseConnectionFactory(configFile)?.use { connection ->
-        val connectedGraphs = ConnectivityInspector(graph).connectedSets()
+        val finalDocuments = ConnectivityInspector(graph).connectedSets()
             .filter { tables ->
                 val dg = DefaultDirectedGraph<QueryTable, DefaultEdge>(DefaultEdge::class.java)
                 tables.forEach(dg::addVertex)
                 tables.forEach { vertex ->
-                    vertex.Relations.keys
-                        .filter { otherTable -> otherTable != vertex.Name }
-                        .forEach { otherTable -> dg.addEdge(vertex, tables.find { it.Name == otherTable }) }
+                    vertex.relations.keys
+                        .filter { otherTable -> otherTable != vertex.name }
+                        .forEach { otherTable -> dg.addEdge(vertex, tables.find { it.name == otherTable }) }
                 }
                 if (CycleDetector(dg).detectCycles()) {
                     // TODO Identify cycle
@@ -106,10 +106,10 @@ fun createSchemaDesign(
                     true
                 }
             }
-            .map { tables -> tables.map { DocumentStructure(it, connection.getTableStructure(it.Name)) } }
+            .map { tables -> tables.map { DocumentStructure(it, connection.getTableStructure(it.name)) } }
             .map { documents ->
                 documents.forEach { document ->
-                    document.baseTable.Relations
+                    document.baseTable.relations
                         .filter { (_, columns) -> document.keys.containsAll(columns.map { it.first }) }
                         .forEach { (otherTable, columns) ->
                             documents
@@ -121,7 +121,7 @@ fun createSchemaDesign(
                 val subGraph = DefaultDirectedGraph<DocumentStructure, DefaultEdge>(DefaultEdge::class.java)
                 documents.forEach(subGraph::addVertex)
                 documents.forEach { vertex ->
-                    vertex.baseTable.Relations.keys.forEach { otherTable -> subGraph.addEdge(vertex, documents.find { it.name == otherTable }) }
+                    vertex.baseTable.relations.keys.forEach { otherTable -> subGraph.addEdge(vertex, documents.find { it.name == otherTable }) }
                 }
 
                 subGraph
@@ -130,15 +130,15 @@ fun createSchemaDesign(
                 val tables = subGraph.vertexSet().associateBy { it.name }
                 val documentCache = HashMap<String, DocumentStructure>()
                 fun getOrigins(tables: Collection<DocumentStructure>): List<String> {
-                    val successors = tables.flatMap { table -> table.baseTable.Relations.filter { (otherTable, _) -> otherTable != table.name }.keys }
+                    val successors = tables.flatMap { table -> table.baseTable.relations.filter { (otherTable, _) -> otherTable != table.name }.keys }
                     return tables.filter { table -> !successors.contains(table.name) }.map { it.name }
                 }
 
                 fun generateFullExtension(table: String): DocumentStructure {
                     val current = documentCache[table]?.let { return it } ?: tables[table]!!
-                    current.nested.addAll(current.baseTable.Relations.keys.map(::generateFullExtension))
+                    current.nested.addAll(current.baseTable.relations.keys.map(::generateFullExtension))
                     documentCache[table] = current
-                    return current;
+                    return current
                 }
 
                 var origins = getOrigins(tables.values)
@@ -179,16 +179,18 @@ fun createSchemaDesign(
                 } while (!(approved.containsAll(origins) && approved.containsAll(additionalDocuments)))
 
                 approved.map { tables[it] }
-            }
+            }.filterNotNull()
         // TODO Kardinalitäten bestimmen
         // TODO Redundanzen/Beziehungen der Objekte ermitteln
+        return finalDocuments
     }
+    return emptyList()
 }
 
 fun switchRelation(first: DocumentStructure, second: DocumentStructure) {
-    second.baseTable.Relations[first.name] =
-        (first.baseTable.Relations[second.name]?.map { it.second to it.first } ?: emptyList()).toMutableList()
-    first.baseTable.Relations.remove(second.name)
+    second.baseTable.relations[first.name] =
+        (first.baseTable.relations[second.name]?.map { it.second to it.first } ?: emptyList()).toMutableList()
+    first.baseTable.relations.remove(second.name)
     first.nested.find { it.name == second.name }?.let {
         first.nested.remove(it)
         second.nested.add(first)

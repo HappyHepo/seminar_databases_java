@@ -17,6 +17,8 @@ import java.util.*
 import kotlin.collections.ArrayList
 import kotlin.collections.HashMap
 
+// TODO documentation
+
 fun parseSqlFile(filename: String): List<QueryStructure>? {
     val sql = File(filename).let {
         if (it.exists()) {
@@ -36,13 +38,13 @@ fun parseSqlFile(filename: String): List<QueryStructure>? {
         }
         .flatMap { cleanUnionWith(it) }
         .flatMap { cleanUnionFrom(it) }
-        .flatMap { cleanUnionJoin(it) } // TODO resolve OUTER APPLY
+        .flatMap { cleanUnionJoin(it) } // TODO resolve OUTER APPLY // Done?
         .flatMap { cleanUnionCondition(it) }
         .map { cleanWith(it) }
         .map { cleanSubSelect(it) }
 
     return cleaned.mapNotNull { query ->
-        (query.selectBody as? PlainSelect)?.let { parseSelect(it) }?.associateBy { it.Name }
+        (query.selectBody as? PlainSelect)?.let { parseSelect(it) }?.associateBy { it.name }
     }
 }
 
@@ -250,7 +252,6 @@ fun cleanSubSelect(body: PlainSelect, replacementFilter: (String) -> Boolean = {
     }
 }
 
-// TODO map CTEs to original table
 fun cleanWith(query: Select): Select {
     if (query.withItemsList?.isNotEmpty() == true) {
         // Merge WithItems into single
@@ -312,7 +313,6 @@ fun replaceTable(base: PlainSelect, fromItemFactory: (String) -> FromItem, alias
             }
         }
     }
-    // TODO resolve recursive
     cleanSubSelect(base, replacementFilter)
 }
 
@@ -434,7 +434,7 @@ fun parseSelect(select: PlainSelect): Collection<QueryTable> {
                 tables[name] = QueryTable(name)
                 tableOrder.add(name)
             }
-            tables[name]!!.Properties.let {
+            tables[name]!!.properties.let {
                 if (actualColumn.columnName !in it) {
                     it.add(actualColumn.columnName)
                 }
@@ -453,7 +453,7 @@ fun parseSelect(select: PlainSelect): Collection<QueryTable> {
             current = second
             other = first
         }
-        tables[aliases[other.table.name] ?: other.table.name]?.Relations?.let { tableRelations ->
+        tables[aliases[other.table.name] ?: other.table.name]?.relations?.let { tableRelations ->
             if (!tableRelations.contains(table)) {
                 tableRelations[table] = ArrayList()
             }

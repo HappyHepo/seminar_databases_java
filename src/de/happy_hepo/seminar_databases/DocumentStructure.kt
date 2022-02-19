@@ -7,7 +7,7 @@ class DocumentStructure(
     val databaseColumns: List<Column>? = null,
 ) {
     val keys = this.databaseColumns?.filter { it.Key }?.map { it.Name } ?: emptyList()
-    val name = this.baseTable.Name
+    val name = this.baseTable.name
     val nested: MutableList<DocumentStructure> = ArrayList()
 
     override fun toString(): String {

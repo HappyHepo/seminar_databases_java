@@ -4,7 +4,7 @@ import org.mariadb.jdbc.Connection
 import java.sql.DriverManager
 
 class MariaDBConnection(settings: DatabaseSettings) : IDatabaseConnection {
-    private val Connection = DriverManager.getConnection(
+    private val connection = DriverManager.getConnection(
         "jdbc:mariadb://${settings.Host}${settings.Port?.let { ":$it" } ?: ""}/${settings.DatabaseName}",
         settings.User,
         settings.Password
@@ -20,7 +20,7 @@ class MariaDBConnection(settings: DatabaseSettings) : IDatabaseConnection {
      */
     override fun getTableStructure(table: String): List<Column> {
         val out = ArrayList<Column>()
-        this.Connection.createStatement().use { stmt ->
+        this.connection.createStatement().use { stmt ->
             val results = stmt.executeQuery("DESCRIBE $table;")
             while (results.next()) {
                 out.add(
@@ -36,6 +36,6 @@ class MariaDBConnection(settings: DatabaseSettings) : IDatabaseConnection {
     }
 
     override fun close() {
-        this.Connection.close()
+        this.connection.close()
     }
 }

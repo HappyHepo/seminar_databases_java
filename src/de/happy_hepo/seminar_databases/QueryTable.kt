@@ -4,29 +4,29 @@ package de.happy_hepo.seminar_databases
  * POJO to simplify the structure of a query for later
  */
 class QueryTable(
-    var Name: String,
-    val Properties: MutableList<String> = ArrayList(),
+    var name: String,
+    val properties: MutableList<String> = ArrayList(),
     /**
      * Map of relations. Each Entry lists  the property mapping (this table > other table) for a given other table.
      * Obtained by traversing the JOINs of a query
      */
-    val Relations: MutableMap<String, MutableList<Pair<String, String>>> = HashMap(),
+    val relations: MutableMap<String, MutableList<Pair<String, String>>> = HashMap(),
 ) {
     fun merge(other: QueryTable) {
-        if (other.Name != this.Name) {
+        if (other.name != this.name) {
             throw Exception("Tables do not match!") // TODO proper Exception
         }
         // Merge Props
-        other.Properties.forEach {
-            if (it !in this.Properties) {
-                this.Properties.add(it)
+        other.properties.forEach {
+            if (it !in this.properties) {
+                this.properties.add(it)
             }
         }
         // Merge Relations
-        other.Relations.forEach { (name, relations) ->
-            this.Relations[name].let { existing ->
+        other.relations.forEach { (name, relations) ->
+            this.relations[name].let { existing ->
                 if (existing == null) {
-                    this.Relations[name] = relations
+                    this.relations[name] = relations
                 } else {
                     relations.forEach {
                         if (existing.find { (from, to) -> it.first == from && it.second == to } == null) {
@@ -39,6 +39,6 @@ class QueryTable(
     }
 
     override fun toString(): String {
-        return "$Name: {${Properties.joinToString(",")}}"
+        return "$name: {${properties.joinToString(",")}}"
     }
 }
