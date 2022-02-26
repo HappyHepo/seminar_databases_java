@@ -16,14 +16,13 @@ fun main(args: Array<String>) {
             // merge queries to Graph
             val graph = createGraph(it)
 
-            val ui: IUi = CliUi()
-            val documents = createSchemaDesign(graph, /*it,*/ "config.json", ui)
+            val documents = createSchemaDesign(graph,"config.json", getUI())
 
-            File(args.getOrElse(1) { "out.json" }).let { file ->
+            File(args.getOrElse(1) { "result.json" }).let { file ->
                 if (!file.exists()) {
                     file.createNewFile()
                 } else {
-// TODO ask if overwrite
+                    // TODO ask if overwrite
                 }
                 file.writeText("[${documents.joinToString(",\n") { doc -> doc.toString(4) }}]")
             }
@@ -75,15 +74,13 @@ fun createGraph(queries: List<QueryStructure>): DefaultDirectedGraph<QueryTable,
     return dg
 }
 
-// TODO Bei Hierarchischen Queries prüfen, welche Eltern/Kind-Attribute benötigt werden; in Dokument aufnehmen
-
+// TODO Check self referencing queries for parent/child attributes, add to document
 // TODO cyclic graphs currently not supported
 //  idea: identify the cycle and ask the user to pick a split
 fun createSchemaDesign(
     graph: DefaultDirectedGraph<QueryTable, DefaultEdge>,
-    // queries: List<QueryStructure>, TODO needed?
     configFile: String,
-    ui:IUi,
+    ui: IUi,
 ): List<DocumentStructure> {
     DatabaseConnectionFactory(configFile)?.use { connection ->
         val finalDocuments = ConnectivityInspector(graph).connectedSets()
@@ -171,6 +168,7 @@ fun createSchemaDesign(
                                 additionalDocuments.add(child)
                                 if (result == ApprovalAnswer.Split) {
                                     tables[parent]?.nested?.removeIf { it.name == child }
+                                    tables[parent]?.split?.add(child)
                                 }
                             }
                         }

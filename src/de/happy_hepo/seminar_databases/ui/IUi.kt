@@ -19,3 +19,7 @@ enum class ApprovalAnswer(
 interface IUi {
     fun askApproval(document: DocumentStructure): ApprovalAnswer
 }
+
+fun getUI():IUi {
+    return CliUi()
+}
